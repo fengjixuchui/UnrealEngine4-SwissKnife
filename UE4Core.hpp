@@ -214,11 +214,13 @@ public:
 static_assert(offsetof(UBoolProperty, Offset) == 0x44);
 static_assert(offsetof(UBoolProperty, Offset) == 0x44);
 static_assert(offsetof(UBoolProperty, Next) == 0x28);
-DWORD dwOffOffset = 0x44;
 namespace UObj_Offsets {
+	DWORD dwOffOffset = 0x44;
+	DWORD dwActorsList = 0xA0;
 	DWORD dwSuperClassOffset2 = offsetof(UStruct, SuperField);
 	DWORD dwSizeOffset = offsetof(UProperty, ArrayDim);
 	DWORD dwStructOffset = 0;
+	DWORD dwBitmaskOffset = 0;
 	DWORD dwInnerOffset = offsetof(UStructProperty, Struct);
 	DWORD dwPropSize = offsetof(UStruct, PropertySize);
 	DWORD dwChildOffset = offsetof(UStruct, Children);
