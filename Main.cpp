@@ -22,9 +22,8 @@ std::unique_ptr<sol::state> state;
 
 ULONG_PTR ENGINE_OFFSET = 0;
 
-//#define DRV_MODE
+#define DRV_MODE
 #ifdef DRV_MODE
-#include "Game.hpp"
 /* TODO */
 #include "Driver.hpp"
 #endif
@@ -244,6 +243,9 @@ class UProxy {
 public:
 	ULONG_PTR ptr;
 	T obj;
+	UProxy() {
+		ptr = 0;
+	}
 	UProxy(ULONG_PTR _ptr) : ptr(_ptr) {
 		ReadTo((LPBYTE)_ptr, &obj, sizeof(obj));
 	}
@@ -371,6 +373,8 @@ public:
 };
 class UPropertyProxy : public UProxy<UProperty> {
 public:
+	UPropertyProxy() : UProxy<UProperty>() {
+	}
 	UPropertyProxy(ULONG_PTR _ptr) : UProxy<UProperty>(_ptr) {
 
 	}
@@ -483,7 +487,7 @@ ULONG_PTR gObj = 0;
 void GScan() {
 	MEMORY_BASIC_INFORMATION meminfo = { 0 };
 	ULONG_PTR current = 0x10000;
-	FUObjectArray GObj{};
+	//FUObjectArray GObj{};
 	int counter = 0;
 	char msg[124];
 #ifdef DRV_MODE
@@ -545,7 +549,7 @@ void GScan() {
 	}
 	//GetGObjectsGen();
 
-	gObj = (ULONG_PTR)GObj.ObjObjects.Objects;
+	//gObj = (ULONG_PTR)GObj.ObjObjects.Objects;
 	ULONG_PTR pGObj = 0;
 	//sprintf_s(msg, 124, "GObj PTR: %p \n", GetGObjects());
 	//OutputDebugStringA(msg);
@@ -553,8 +557,8 @@ void GScan() {
 		OutputDebugStringA(CNames::GetName(i));
 		OutputDebugStringA("\n");
 	}
-	sprintf_s(msg, 124, "SCAN GObj PTR: %p \n", gObj);
-	OutputDebugStringA(msg);
+	//sprintf_s(msg, 124, "SCAN GObj PTR: %p \n", gObj);
+	//OutputDebugStringA(msg);
 	sprintf_s(msg, 124, "SCAN GNames PTR: %p / %p / %p \n", hProcess, GNames - GetBase(), GetBase());
 	OutputDebugStringA(msg);
 }
@@ -970,7 +974,7 @@ std::string GetInfo(ULONG_PTR ptr, UClassProxy c) {
 	_j["data"] = j;
 
 	auto ret = _j.dump();
-	OutputDebugStringA(ret.c_str());
+	//OutputDebugStringA(ret.c_str());
 	return ret;
 
 }
@@ -980,6 +984,48 @@ std::string GetInfo(ULONG_PTR ptr) {
 
 std::string GetClass(ULONG_PTR ptr) {
 	return GetInfo(NULL, UObjectProxy(ptr).As<UClassProxy>());
+}
+
+
+bool FindProp(ULONG_PTR pObj, std::string pText, UPropertyProxy& out) {
+	DWORD structSize = 0;
+	auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
+
+	for (DWORD i = 0; i < vProperty.size(); i++) {
+		auto p = vProperty[i];
+		std::string name = p.GetName();
+		bool bMatch = name == pText;
+		auto dwOffset = p.GetOffset();
+		if (!bMatch && p.IsStruct()) {
+			UClassProxy c = p.GetStruct().As<UClassProxy>();
+			//list properties
+			//TODO: CHECK SUPER
+			UPropertyProxy _f = c.GetChildren().As<UPropertyProxy>();
+
+			while (!bMatch) {
+				if (!_f.IsFunction()) {
+					//check _f name
+					name = p.GetName().append(".").append(_f.GetName());
+					bMatch = name == pText;
+					if (bMatch) {
+						p = _f;
+						break;
+					}
+				}
+				if (!_f.HasNext()) {
+					break;
+				}
+				_f = _f.GetNext();
+				//break;
+			}
+		}
+		if (bMatch) {
+			out = p;
+			return true;
+		}
+	}
+
+	return false;
 }
 
 class FieldCache {
@@ -1007,45 +1053,10 @@ public:
 	}
 	DWORD Find(ULONG_PTR pObj) {
 		if (nOffset) return nOffset;
-		DWORD structSize = 0;
-		auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
 
-		for (DWORD i = 0; i < vProperty.size(); i++) {
-			auto p = vProperty[i];
-			std::string name = p.GetName();
-			bool bMatch = name == szField;
-			auto dwOffset = p.GetOffset();
-			if (!bMatch && p.IsStruct()) {
-				UClassProxy c = p.GetStruct().As<UClassProxy>();
-				//list properties
-				//TODO: CHECK SUPER
-				UPropertyProxy _f = c.GetChildren(true).As<UPropertyProxy>();
-
-				while (!bMatch) {
-					OutputDebugStringA("Stuck in loop?\n");
-					if (!_f.IsFunction()) {
-						//check _f name
-						name = p.GetName().append(".").append(_f.GetName());
-						bMatch = name == szField;
-						if (bMatch) {
-							p = _f;
-							dwOffset += _f.GetOffset();
-						}
-					}
-					if (!_f.HasNext() ) {
-						break;
-					}
-					DWORD64 lastPtr = _f.ptr;
-					_f = _f.GetNext();
-					if (_f.ptr == lastPtr) break;
-					//break;
-				}
-			}
-			if (bMatch) {
-
-				char msg[124];
-				sprintf_s(msg, 124, "%04X GOT match %s / %s\n", dwOffset, name.c_str(), szField);
-				OutputDebugStringA(msg);
+		UPropertyProxy p;
+		if (FindProp(pObj, szField, p)) {
+			DWORD dwOffset = p.GetOffset();
 				nOffset = dwOffset;
 				if (p.IsBool()) {
 					nType = T_BOOL;
@@ -1059,8 +1070,6 @@ public:
 				else if (p.IsFloat()) {
 					nType = T_FLOAT;
 				}
-				break;
-			}
 		}
 		return nOffset;
 	}
@@ -1082,6 +1091,30 @@ public:
 		return sol::make_object(lua, sol::lua_nil);
 	}
 };
+
+
+DWORD64 FindObject(LPCSTR name, DWORD dwFlag = 0) {
+	DWORD64 pArray = Read(gObj);
+	for (DWORD i = 0; i < 9; i++) {
+		DWORD64 pObjArr = Read(pArray + (8 * i));
+		printf("read %p\n", pObjArr);
+		if (!pObjArr) break;
+		FUObjectItem* fuObject = (FUObjectItem*)pObjArr;
+		for (auto i = 0; i < 0x10000; ++i, ++fuObject) {
+			UObjectProxy object = Read<FUObjectItem>(fuObject).Object;
+			if (!object.ptr || (dwFlag && dwFlag != object.obj.ObjectFlags)) {
+				continue;
+			}
+			auto objName = CNames::GetName(object.GetId());
+			if (!strcmp(objName, name)) {
+				//OutputDebugStringW(objName);
+				return object.ptr;
+			}
+		}
+	}
+
+	return 0;
+}
 
 class AActor {
 public:
@@ -1227,6 +1260,9 @@ bool LuaInit() {
 	lua.set_function(("ReadF"), [](ULONG_PTR dwAddr) {
 		return Read<float>((LPVOID)dwAddr);
 		});
+	lua.set_function("FindObject", [](LPCSTR objName) {
+		return FindObject(objName);
+		});
 	lua.set_function(("GetEngine"), []() {
 		auto e = AActor(Read<ULONG_PTR>(GetBase() + ENGINE_OFFSET));
 		return (ULONG_PTR)e._this;
@@ -1261,94 +1297,14 @@ bool LuaInit() {
 
 
 		});
-	lua.set_function(("GetObject"), [](ULONG_PTR pObj, std::string pText) {
-		ULONG_PTR pRet = NULL;
-		DWORD structSize = 0;
-		auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
-
-		for (DWORD i = 0; i < vProperty.size(); i++) {
-			auto p = vProperty[i];
-			std::string name = p.GetName();
-			bool bMatch = name == pText;
-			auto dwOffset = p.GetOffset();
-			if (bMatch) {
-				pRet = Read<ULONG_PTR>((LPBYTE)pObj + dwOffset);
-				break;
-			}
-		}
-		return pRet;
-		});
-
 	lua.set_function(("GetOffset"), [](ULONG_PTR pObj, std::string pText) {
-		DWORD structSize = 0;
-		auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
-
-		for (DWORD i = 0; i < vProperty.size(); i++) {
-			auto p = vProperty[i];
-			std::string name = p.GetName();
-			bool bMatch = name == pText;
-			auto dwOffset = p.GetOffset();
-			if (!bMatch && p.IsStruct()) {
-				UClassProxy c = p.GetStruct().As<UClassProxy>();
-				//list properties
-				//TODO: CHECK SUPER
-				UPropertyProxy _f = c.GetChildren().As<UPropertyProxy>();
-
-				while (!bMatch) {
-					if (!_f.IsFunction()) {
-						//check _f name
-						name = p.GetName().append(".").append(_f.GetName());
-						bMatch = name == pText;
-						if (bMatch) {
-							p = _f;
-							dwOffset += _f.GetOffset();
-						}
-					}
-					if (!_f.HasNext()) {
-						break;
-					}
-					_f = _f.GetNext();
-					//break;
-				}
-			}
-			if(bMatch)
-				return dwOffset;
-		}
-		return 0; });
+		UPropertyProxy p;
+		return FindProp(pObj,pText,p) ? p.GetOffset() : 0;
+		 });
 	lua.set_function(("GetField"), [](ULONG_PTR pObj, std::string pText) {
-		DWORD structSize = 0;
-		auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
-
-		for (DWORD i = 0; i < vProperty.size(); i++) {
-			auto p = vProperty[i];
-			std::string name = p.GetName();
-			bool bMatch = name == pText;
-			auto dwOffset = p.GetOffset();
-			if (!bMatch && p.IsStruct()) {
-				UClassProxy c = p.GetStruct().As<UClassProxy>();
-				//list properties
-				//TODO: CHECK SUPER
-				UPropertyProxy _f = c.GetChildren().As<UPropertyProxy>();
-
-				while (!bMatch) {
-					if (!_f.IsFunction()) {
-						//check _f name
-						name = p.GetName().append(".").append(_f.GetName());
-						bMatch = name == pText;
-						if (bMatch) {
-							p = _f;
-							dwOffset += _f.GetOffset();
-						}
-					}
-					if (!_f.HasNext()) {
-						break;
-					}
-					_f = _f.GetNext();
-					//break;
-				}
-			}
-			if (bMatch) {
-
+		UPropertyProxy p;
+		if(FindProp(pObj, pText, p)) {
+			DWORD dwOffset = p.GetOffset();
 				if (p.IsObject()) {
 					return sol::make_object(lua, Read<DWORD64>((LPBYTE)pObj + dwOffset));
 				}
@@ -1376,45 +1332,14 @@ bool LuaInit() {
 					delete[] ptrs;
 					return sol::make_object(lua, sol::as_table(ret));
 				}
-				break;
-			}
 		}
 		return sol::make_object(lua, sol::lua_nil);
 		});
 	lua.set_function(("SetField"), [](ULONG_PTR pObj, std::string pText, float fVal) {
 		DWORD pRet = 0;
-		DWORD structSize = 0;
-		auto vProperty = GetProps(UObjectProxy(pObj).GetClass().As<UClassProxy>(), structSize);
-
-		for (DWORD i = 0; i < vProperty.size(); i++) {
-			auto p = vProperty[i];
-			std::string name = p.GetName();
-			bool bMatch = name == pText;
-			auto dwOffset = p.GetOffset();
-			if (!bMatch && p.IsStruct()) {
-				UClassProxy c = p.GetStruct().As<UClassProxy>();
-				//list properties
-				//TODO: CHECK SUPER
-				UPropertyProxy _f = c.GetChildren().As<UPropertyProxy>();
-
-				while (!bMatch) {
-					if (!_f.IsFunction()) {
-						//check _f name
-						name = p.GetName().append(".").append(_f.GetName());
-						bMatch = name == pText;
-						if (bMatch) {
-							p = _f;
-							dwOffset += _f.GetOffset();
-						}
-					}
-					if (!_f.HasNext()) {
-						break;
-					}
-					_f = _f.GetNext();
-					//break;
-				}
-			}
-			if (bMatch) {
+		UPropertyProxy p;
+		if (FindProp(pObj, pText, p)) {
+			DWORD dwOffset = p.GetOffset();
 				pRet = 1;
 
 				if (p.IsBool()) {
@@ -1435,8 +1360,9 @@ bool LuaInit() {
 				else if (p.IsFloat()) {
 					pRet = Write<float>((LPBYTE)pObj + dwOffset, fVal);
 				}
-				break;
-			}
+				else if (p.IsObject()) {
+					pRet = Write<DWORD64>((LPBYTE)pObj + dwOffset, fVal);
+				}
 		}
 		return pRet;
 		});
@@ -1853,6 +1779,10 @@ std::vector<std::size_t> AOBScan(std::string str_pattern) {
 
 	return ret;
 }
+
+
+
+
 DWORD DoScan(std::string pattern, DWORD offset = 0, DWORD base_offset = 0, DWORD pre_base_offset = 0, DWORD rIndex = 0) {
 	//ULONG_PTR dwBase = (DWORD_PTR)GetModuleHandleW(NULL);
 	auto r = AOBScan(pattern);
@@ -1928,14 +1858,14 @@ void VerifyOffsets() {
 }
 
 
+#include "Game.hpp"
 
 int main() {
 	LuaInit();
-	InitLastOasis();
+	//InitLastOasis();
 	//InitBorderlands3();
-	//InitPubGSteam();
+	InitPubGSteam();
 	//VerifyOffsets();
-
 	std::thread t = StartWebServer();
 	OutputDebugStringA(CNames::GetName(0));
 
